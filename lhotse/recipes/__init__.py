@@ -6,6 +6,7 @@ from .ali_meeting import download_ali_meeting, prepare_ali_meeting
 from .ami import download_ami, prepare_ami
 from .aspire import prepare_aspire
 from .atcosim import download_atcosim, prepare_atcosim
+from .audioset import download_audioset, prepare_audioset
 from .babel import prepare_single_babel_language
 from .baker_zh import download_baker_zh, prepare_baker_zh
 from .bengaliai_speech import prepare_bengaliai_speech
@@ -113,6 +114,8 @@ __all__ = [
     "prepare_aspire",
     "download_atcosim",
     "prepare_atcosim",
+    "download_audioset",
+    "prepare_audioset",
     "prepare_single_babel_language",
     "prepare_bengaliai_speech",
     "prepare_broadcast_news",

@@ -9,6 +9,7 @@ from .ami import *
 from .aspire import *
 from .atcosim import *
 from .audio_mnist import *
+from .audioset import *
 from .babel import *
 from .baker_zh import *
 from .bengaliai_speech import *

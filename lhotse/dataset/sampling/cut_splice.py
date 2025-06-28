@@ -26,13 +26,15 @@ class CutSpliceIterable(Dillable):
         cutset_weights: Optional[Sequence[CutSet]] = None,
         cutset_prefixes: Optional[List[str]] = None,
         max_duration: Seconds = None,
-        max_splices: int = 10,
+        max_splices: int = 2,
         max_unique: int = 3,
         max_overlap: List[float] = None,
         serialize: str = 'speech',
         max_snr: List[float] = None,
         sampling_rate: int = 16000,
         normalize_loudness: bool = False,
+        splices_schedule_increment: float = 4e-05,
+        final_max_splices: int = 6,
         seed: int = 0,
     ):
 
@@ -62,6 +64,13 @@ class CutSpliceIterable(Dillable):
         self.sr = sampling_rate
         self.seed = seed
         self.splice_cut = None
+        self.init_max_splices = max_splices
+        self.final_max_splices = final_max_splices
+        self.splices_schedule_increment = splices_schedule_increment
+        self.curr_splice_increment = 0
+
+    def set_max_splices(self, val: int):
+        self.max_splices = val
 
     def __iter__(self):
         self.cutset_iterables = {i: iter(cs) for i, cs in enumerate(self.cutsets)}
@@ -79,13 +88,13 @@ class CutSpliceIterable(Dillable):
             self.cutset_weights, k=num_unique_sets, rng=rng
         )
 
-        print(f"IDXs of chosen manifests: {spliceable_cutsets}")
+        #print(f"IDXs of chosen manifests: {spliceable_cutsets}")
         # Uniform
         cutsets_to_splice = rng.choices(
             spliceable_cutsets,
             k=num_splices,
         )
-        print(f"Order of manifests: {cutsets_to_splice}")
+        #print(f"Order of manifests: {cutsets_to_splice}")
 
         # Initialize the cut to return. Either it will be None or it will be
         # a cut that was previously sampled that we didn't want to discard.
@@ -109,10 +118,10 @@ class CutSpliceIterable(Dillable):
         
         # Start creating overlapped / spliced audio samples
         for i, cs_idx in enumerate(cutsets_to_splice):
-            print("++next")
+            #print("++next")
             # How much should this next segment be overlapped?
             overlap = self.max_overlap[cs_idx] * rng.random()
-            print(f'idx: {i}, cs_idx: {cs_idx}, overlap: {overlap}')
+            #print(f'idx: {i}, cs_idx: {cs_idx}, overlap: {overlap}')
             # What snr should be used? Only apply to overlapped segments
             snr = self.max_snr[cs_idx] * rng.random() if self.max_overlap[cs_idx] > 0 else 0.0
             
@@ -179,12 +188,12 @@ class CutSpliceIterable(Dillable):
             else:
                 offset = start
             
-            print(f'offset: {offset}')
-            print(f'duration: {cut_to_append.duration}')
-            print(f'delta duration: {cut_to_append.duration - overlap*cut_to_append.duration}')
+            #print(f'offset: {offset}')
+            #print(f'duration: {cut_to_append.duration}')
+            #print(f'delta duration: {cut_to_append.duration - overlap*cut_to_append.duration}')
             # Check duration condition
             new_duration = offset + cut_to_append.duration
-            print(f'new_duration: {new_duration}')
+            #print(f'new_duration: {new_duration}')
             if self.max_duration and new_duration > self.max_duration:
                 # Two cases: One for overlap, the other for no overlap
                 if overlap > 0:
@@ -283,6 +292,17 @@ class CutSpliceIterable(Dillable):
                     merge_policy="keep_first"
                 )
         self.splice_cut = None
+        
+        # Make the splices longer / more overlapped as training continues
+        self.curr_splice_increment += self.splices_schedule_increment
+        self.set_max_splices(
+            int(
+                min(
+                    self.final_max_splices,
+                    self.init_max_splices + self.curr_splice_increment
+                )
+            )
+        )  
         return final_cut
 
 
@@ -306,7 +326,6 @@ def test():
     snrs = [0, 0, 0, 0, 0, 0, 0, 0]
     for p, o, s in zip(cut_manifests, overlaps, snrs):
         print(f'{p}: {o}, {s}')
-    import pdb; pdb.set_trace()
     cs_iter = CutSpliceIterable(
         cutsets,
         max_splices=10,
