@@ -131,7 +131,6 @@ def prepare_audioset(
     assert corpus_dir.is_dir(), f"No such directory: {corpus_dir}"
 
     parts = ("train", "eval")
-
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     # Maybe some manifests already exist: we can read them and save a bit of preparation time.
@@ -153,8 +152,8 @@ def prepare_audioset(
 
         filename = corpus_dir / f"audioset_{part}_strong.tsv"
         # Remove duplicate annotations
-        with open(filename, "r", encoding="utf-8") as file:
-            items = list(set(file.readlines()[1:]))
+        with open(filename, "r", encoding="utf-8") as f:
+            items = list(set(f.readlines()[1:]))
 
         lookup = {}
         mid_to_display_name = corpus_dir / "mid_to_display_name.tsv"
@@ -171,7 +170,7 @@ def prepare_audioset(
             file_path = corpus_dir / part / f"{segment_id}.wav"
             if file_path.exists():
                 items_dict[segment_id].append(annotation)
-
+        
         with RecordingSet.open_writer(
             output_dir / f"audioset_recordings_{part}.jsonl.gz"
         ) as rec_writer, SupervisionSet.open_writer(
@@ -189,6 +188,8 @@ def prepare_audioset(
                 desc=f"Processing Audioset {part} entries",
                 total=len(items_dict.values()),
             ):
+                if recording is None:
+                    continue
                 # Filter warnings
                 logging.getLogger().setLevel(logging.ERROR)
 
@@ -234,14 +235,16 @@ def parse_annotation(
     segments = []
     for annotation in item:
         _, start_time, end_time, label = annotation.strip().split("\t")
-        segment = SupervisionSegment(
-            id=f"{youtube_id}-{start_time}-{end_time}-{label}",
-            recording_id=youtube_id,
-            start=float(start_time),
-            duration=float(end_time) - float(start_time),
-            channel=0,
-            text=lookup[label],
-        )
-        segments.append(segment)
-
+        try:
+            segment = SupervisionSegment(
+                id=f"{youtube_id}-{start_time}-{end_time}-{label}",
+                recording_id=youtube_id,
+                start=float(start_time),
+                duration=float(end_time) - float(start_time),
+                channel=0,
+                text=lookup[label],
+            )
+            segments.append(segment)
+        except KeyError:
+            return None, None
     return recording, segments

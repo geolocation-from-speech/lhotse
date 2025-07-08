@@ -576,7 +576,7 @@ class Wav2LogFilterBank(Wav2FFT):
         X = _rfft(x_strided)
         pow_spec = self._to_spec(X)
 
-        pow_spec = torch.matmul(pow_spec, self._fb)
+        pow_spec = torch.matmul(pow_spec.to(self._fb.dtype), self._fb)
         pow_spec = torch.max(pow_spec, self._eps).log()
 
         # log_e is not None is needed by torchscript

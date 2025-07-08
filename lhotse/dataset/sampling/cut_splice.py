@@ -29,6 +29,7 @@ class CutSpliceIterable(Dillable):
         max_splices: int = 2,
         max_unique: int = 3,
         max_overlap: List[float] = None,
+        min_overlap: List[float] = None,
         serialize: str = 'speech',
         max_snr: List[float] = None,
         sampling_rate: int = 16000,
@@ -55,11 +56,19 @@ class CutSpliceIterable(Dillable):
         else:
            self.max_overlap = [0.0 for i in cutsets]
 
+        if min_overlap is not None:
+            assert len(min_overlap) == len(cutsets)
+            for i, o in enumerate(min_overlap):
+                assert o <= max_overlap[i]
+            self.min_overlap = min_overlap
+        else:
+            self.min_overlap = [0.0 for i in cutsets]
+
         if max_snr is not None:
             assert len(max_snr) == len(cutsets)
             self.max_snr = max_snr
         else:
-           self.max_snr = [0.0 for i in cutsets]
+            self.max_snr = [0.0 for i in cutsets]
 
         self.sr = sampling_rate
         self.seed = seed
@@ -120,7 +129,7 @@ class CutSpliceIterable(Dillable):
         for i, cs_idx in enumerate(cutsets_to_splice):
             #print("++next")
             # How much should this next segment be overlapped?
-            overlap = self.max_overlap[cs_idx] * rng.random()
+            overlap = (self.max_overlap[cs_idx] - self.min_overlap[cs_idx]) * rng.random() + self.min_overlap[cs_idx]
             #print(f'idx: {i}, cs_idx: {cs_idx}, overlap: {overlap}')
             # What snr should be used? Only apply to overlapped segments
             snr = self.max_snr[cs_idx] * rng.random() if self.max_overlap[cs_idx] > 0 else 0.0
