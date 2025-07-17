@@ -27,6 +27,7 @@ class CutSpliceIterable(Dillable):
         cutset_prefixes: Optional[List[str]] = None,
         max_duration: Seconds = None,
         max_splices: int = 2,
+        min_splices: int = 2,
         max_unique: int = 3,
         max_overlap: List[float] = None,
         min_overlap: List[float] = None,
@@ -34,8 +35,10 @@ class CutSpliceIterable(Dillable):
         max_snr: List[float] = None,
         sampling_rate: int = 16000,
         normalize_loudness: bool = False,
-        splices_schedule_increment: float = 4e-05,
+        max_splices_schedule_increment: float = 4e-05,
+        min_splices_schedule_increment: float = 4e-05,
         final_max_splices: int = 6,
+        final_min_splices: int = 2,
         seed: int = 0,
     ):
 
@@ -48,6 +51,8 @@ class CutSpliceIterable(Dillable):
         self.max_duration = max_duration
         self.max_splices = max_splices
         self.max_unique = max_unique
+        self.min_splices = min_splices
+        assert min_splices <= max_splices
         self.normalize_loudness = normalize_loudness
         self.serialize = serialize
         if max_overlap is not None:
@@ -74,12 +79,19 @@ class CutSpliceIterable(Dillable):
         self.seed = seed
         self.splice_cut = None
         self.init_max_splices = max_splices
+        self.init_min_splices = min_splices
         self.final_max_splices = final_max_splices
-        self.splices_schedule_increment = splices_schedule_increment
-        self.curr_splice_increment = 0
+        self.final_min_splices = final_min_splices
+        self.max_splices_schedule_increment = max_splices_schedule_increment
+        self.min_splices_schedule_increment = min_splices_schedule_increment
+        self.max_curr_splice_increment = 0
+        self.min_curr_splice_increment = 0
 
     def set_max_splices(self, val: int):
         self.max_splices = val
+
+    def set_min_splices(self, val: int):
+        self.min_splices = val
 
     def __iter__(self):
         self.cutset_iterables = {i: iter(cs) for i, cs in enumerate(self.cutsets)}
@@ -90,7 +102,7 @@ class CutSpliceIterable(Dillable):
         # The number is random up to max_slices
         rng = random.Random()
         num_unique_sets = rng.randint(1, self.max_unique)
-        num_splices = rng.randint(1, self.max_splices)
+        num_splices = rng.randint(self.min_splices, self.max_splices)
         # Select which cutsets from which to sample (possibly repeated)
         # Pick without replacement
         spliceable_cutsets = sample(
@@ -303,12 +315,21 @@ class CutSpliceIterable(Dillable):
         self.splice_cut = None
         
         # Make the splices longer / more overlapped as training continues
-        self.curr_splice_increment += self.splices_schedule_increment
+        self.max_curr_splice_increment += self.max_splices_schedule_increment
+        self.min_curr_splice_increment += self.min_splices_schedule_increment
         self.set_max_splices(
             int(
                 min(
                     self.final_max_splices,
-                    self.init_max_splices + self.curr_splice_increment
+                    self.init_max_splices + self.max_curr_splice_increment
+                )
+            )
+        )
+        self.set_min_splices(
+            int(
+                min(
+                    self.final_min_splices,
+                    self.init_min_splices + self.min_curr_splice_increment
                 )
             )
         )  
@@ -326,28 +347,31 @@ def sample(a, k=1, rng=None):
 def test():
     from pathlib import Path
     from lhotse import load_manifest_lazy 
-    root = "/expscratch/mwiesner/scale23/scale2023/icefall/tools/icefall/egs/scale24/ASR/"
-    cut_manifests = list((Path(root) / Path("data/manifests")).rglob("cuts*train*shuffled.jsonl.gz"))
+    root = "/ocean/projects/cis210027p/mwiesner/jsalt2025/icefall/egs/librispeech/MTASR"
+    cut_manifests = list((Path(root) / Path("data/manifests")).rglob("cuts*train*shuffled_*.jsonl.gz"))
     cutsets = []
     for cm in cut_manifests:
         cutsets.append(load_manifest_lazy(cm))
-    overlaps = [0, 0, 0, 0, 0, 0, 1, 0]
-    snrs = [0, 0, 0, 0, 0, 0, 0, 0]
+    overlaps = [1, 1, 1, 1]
+    min_overlaps = [0.8, 0.8, 0.8, 0.8]
+    snrs = [0, 0, 0, 0]
     for p, o, s in zip(cut_manifests, overlaps, snrs):
         print(f'{p}: {o}, {s}')
     cs_iter = CutSpliceIterable(
         cutsets,
-        max_splices=10,
-        max_duration=40,
-        max_unique=3,
+        max_splices=2,
+        min_splices=2,
+        max_duration=30,
+        max_unique=4,
         sampling_rate=16000,
-        serialize='all',
-        max_overlap=[0, 0, 0, 0, 0, 0, 0.5, 0],
-        max_snr=[0, 0, 0, 0, 0, 0, 0, 0],
-        cutset_weights=[0.0285, 0.0285, 0.0285, 0.0285, 0.0285, 0.0285, 0.8, 0.0285,],  
+        serialize='none',
+        max_overlap=overlaps,
+        min_overlap=min_overlaps,
+        max_snr=[0, 0, 0, 0],
+        cutset_weights=[0.25, 0.25, 0.25, 0.25],  
         normalize_loudness=True,
     )
-    for i in range(20):
+    for i in range(5):
         c = next(cs_iter)
         c.save_audio(f"test_wav{i}.wav")
         audio = c.load_audio()
