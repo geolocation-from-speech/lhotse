@@ -26,9 +26,11 @@ class CutSpliceIterable(Dillable):
         cutset_weights: Optional[Sequence[CutSet]] = None,
         cutset_prefixes: Optional[List[str]] = None,
         max_duration: Seconds = None,
+        final_max_duration: Seconds = None,
         max_splices: int = 2,
         min_splices: int = 2,
         max_unique: int = 3,
+        max_num_overlaps: int = 5,
         max_overlap: List[float] = None,
         min_overlap: List[float] = None,
         serialize: str = 'speech',
@@ -37,8 +39,10 @@ class CutSpliceIterable(Dillable):
         normalize_loudness: bool = False,
         max_splices_schedule_increment: float = 4e-05,
         min_splices_schedule_increment: float = 4e-05,
-        final_max_splices: int = 6,
-        final_min_splices: int = 2,
+        max_duration_increment: float = 3e-04,
+        final_max_splices: Optional[int] = 6,
+        final_min_splices: Optional[int] = 2,
+        enforce_separate_spk: bool = True,
         seed: int = 0,
     ):
 
@@ -49,9 +53,11 @@ class CutSpliceIterable(Dillable):
         self.cutset_weights = cutset_weights
         self.cutset_prefixes = cutset_prefixes
         self.max_duration = max_duration
+        self.final_max_duration = final_max_duration
         self.max_splices = max_splices
         self.max_unique = max_unique
         self.min_splices = min_splices
+        self.max_num_overlaps = max_num_overlaps
         assert min_splices <= max_splices
         self.normalize_loudness = normalize_loudness
         self.serialize = serialize
@@ -80,10 +86,17 @@ class CutSpliceIterable(Dillable):
         self.splice_cut = None
         self.init_max_splices = max_splices
         self.init_min_splices = min_splices
+        if final_max_splices is None:
+            final_max_splices = max_splices
+        if final_min_splices is None:
+            final_min_splices = min_splices
+        if final_max_duration is None:
+            final_max_duration = max_duration
         self.final_max_splices = final_max_splices
         self.final_min_splices = final_min_splices
         self.max_splices_schedule_increment = max_splices_schedule_increment
         self.min_splices_schedule_increment = min_splices_schedule_increment
+        self.max_duration_increment = max_duration_increment
         self.max_curr_splice_increment = 0
         self.min_curr_splice_increment = 0
 
@@ -92,6 +105,9 @@ class CutSpliceIterable(Dillable):
 
     def set_min_splices(self, val: int):
         self.min_splices = val
+
+    def set_max_duration(self, val: float):
+        self.max_duration = val
 
     def __iter__(self):
         self.cutset_iterables = {i: iter(cs) for i, cs in enumerate(self.cutsets)}
@@ -214,8 +230,15 @@ class CutSpliceIterable(Dillable):
             #print(f'delta duration: {cut_to_append.duration - overlap*cut_to_append.duration}')
             # Check duration condition
             new_duration = offset + cut_to_append.duration
-            #print(f'new_duration: {new_duration}')
-            if self.max_duration and new_duration > self.max_duration:
+            #print(f'new_duration: {new_duration}, {self.max_duration}')
+            max_duration = self.max_duration
+            num_overlaps = 0
+            if splice_cut:
+                num_overlaps = sum([len(w.supervisions) for w in splice_cut.cut_into_windows(0.5)])
+            if overlap_cut:
+                num_overlaps += sum([len(w.supervisions) for w in overlap_cut.cut_into_windows(0.5)])
+
+            if self.max_duration and new_duration > self.max_duration or num_overlaps > self.max_num_overlaps:
                 # Two cases: One for overlap, the other for no overlap
                 if overlap > 0:
                     # Since we are tossing the overlap cut, we just set the
@@ -315,24 +338,35 @@ class CutSpliceIterable(Dillable):
         self.splice_cut = None
         
         # Make the splices longer / more overlapped as training continues
-        self.max_curr_splice_increment += self.max_splices_schedule_increment
-        self.min_curr_splice_increment += self.min_splices_schedule_increment
-        self.set_max_splices(
-            int(
-                min(
-                    self.final_max_splices,
-                    self.init_max_splices + self.max_curr_splice_increment
+        if self.final_max_splices:
+            self.max_curr_splice_increment += self.max_splices_schedule_increment
+            self.set_max_splices(
+                int(
+                    min(
+                        self.final_max_splices,
+                        self.init_max_splices + self.max_curr_splice_increment
+                    )
                 )
             )
-        )
-        self.set_min_splices(
-            int(
-                min(
-                    self.final_min_splices,
-                    self.init_min_splices + self.min_curr_splice_increment
+        if self.final_min_splices:
+            self.min_curr_splice_increment += self.min_splices_schedule_increment
+            self.set_min_splices(
+                int(
+                    min(
+                        self.final_min_splices,
+                        self.init_min_splices + self.min_curr_splice_increment
+                    )
                 )
             )
-        )  
+        if self.final_max_duration:
+            self.set_max_duration(
+                min(
+                    self.final_max_duration,
+                    self.max_duration + self.max_duration_increment,
+                )
+            )  
+        #print(f"num texts: {len(final_cut.supervisions)}")
+        #print(f"duration: {final_cut.duration}")
         return final_cut
 
 
