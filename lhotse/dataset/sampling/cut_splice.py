@@ -2,8 +2,11 @@ from lhotse import CutSet, Seconds
 from lhotse.lazy import Dillable
 from lhotse.utils import fastcopy
 from lhotse.cut.set import mix
+from lhotse import MonoCut, MultiCut
 
+import numpy as np
 import math
+from itertools import zip_longest
 import warnings
 import random
 from typing import Optional, Sequence, List
@@ -117,7 +120,8 @@ class CutSpliceIterable(Dillable):
         # Sample the number of splices
         # The number is random up to max_slices
         rng = random.Random()
-        num_unique_sets = rng.randint(1, self.max_unique)
+        #num_unique_sets = rng.randint(1, self.max_unique)
+        num_unique_sets = self.max_unique
         num_splices = rng.randint(self.min_splices, self.max_splices)
         # Select which cutsets from which to sample (possibly repeated)
         # Pick without replacement
@@ -181,6 +185,10 @@ class CutSpliceIterable(Dillable):
                     splice_cut = next(
                         self.cutset_iterables[cs_idx]
                     ).resample(self.sr)
+                
+                ## Select a random_mono_cut if it is a multicut
+                #splice_cut = random_mono_cut(splice_cut, None)
+                
                 # Normalize the segment for loudness if requested
                 if self.normalize_loudness:
                     splice_cut = splice_cut.normalize_loudness(-23)
@@ -201,6 +209,10 @@ class CutSpliceIterable(Dillable):
                     overlap_cut = next(
                         self.cutset_iterables[cs_idx]
                     ).resample(self.sr)
+                
+                ## Select a random mono cut
+                #overlap_cut = random_mono_cut(overlap_cut, None)
+                
                 if self.normalize_loudness:
                     overlap_cut = overlap_cut.normalize_loudness(-23)
                 prev_dur = overlap_cut.duration
@@ -212,9 +224,11 @@ class CutSpliceIterable(Dillable):
             # ---------------- Tentative new cut -----------------------------
             try:
                 cut_to_append = next(self.cutset_iterables[cs_idx])
+                #cut_to_append = random_mono_cut(cut_to_append)
             except StopIteration:
                 self.cutset_iterables[cs_idx] = iter(self.cutsets[cs_idx])
                 cut_to_append = next(self.cutset_iterables[cs_idx])
+                #cut_to_append = random_mono_cut(cut_to_append)
 
             # Get the amount overlap
             if overlap > 0:
@@ -233,12 +247,32 @@ class CutSpliceIterable(Dillable):
             #print(f'new_duration: {new_duration}, {self.max_duration}')
             max_duration = self.max_duration
             num_overlaps = 0
+            num_ovlps_splice = np.array([])
             if splice_cut:
-                num_overlaps = sum([len(w.supervisions) for w in splice_cut.cut_into_windows(0.5)])
+                num_ovlps_splice = np.array(
+                    [
+                        len(w.supervisions)
+                        for w in splice_cut.cut_into_windows(0.5)
+                    ]
+                )
+            
+            num_ovlps_ovlp = np.array([])
             if overlap_cut:
-                num_overlaps += sum([len(w.supervisions) for w in overlap_cut.cut_into_windows(0.5)])
+                num_ovlps_ovlp = np.array(
+                    [
+                        len(w.supervisions)
+                        for w in overlap_cut.cut_into_windows(0.5)
+                    ]
+                )
+            
+            num_overlaps = np.array(
+                [
+                    x + y
+                    for x, y in zip_longest(num_ovlps_ovlp, num_ovlps_splice, fillvalue=0)
+                ]
+            )  
 
-            if self.max_duration and new_duration > self.max_duration or num_overlaps > self.max_num_overlaps:
+            if self.max_duration and new_duration > self.max_duration or np.max(num_overlaps) > self.max_num_overlaps:
                 # Two cases: One for overlap, the other for no overlap
                 if overlap > 0:
                     # Since we are tossing the overlap cut, we just set the
@@ -276,6 +310,9 @@ class CutSpliceIterable(Dillable):
                         final_cut = final_cut.merge_supervisions(
                             merge_policy="keep_first",
                         )
+                
+                #print(f"num texts: {len(final_cut.supervisions)}")
+                #print(f"duration: {final_cut.duration}")
                 return final_cut
 
 
@@ -375,6 +412,20 @@ def sample(a, k=1, rng=None):
         math.log(a_i) - math.log(-math.log(random.random())) for a_i in a
     ]
     return sorted(range(len(a)), key=lambda x: values[x], reverse=True)[:k]
+
+
+def random_mono_cut(cut, fix_channel=None):
+    if isinstance(cut, MonoCut):
+        return cut
+    elif isinstance(cut, MultiCut):
+        if fix_channel is None:
+            channel = random.choice(cut.channel)
+        else:
+            channel = fix_channel
+
+        return cut.to_mono()[channel]
+    else:
+        raise ValueError(f"Unexpected cut type: {type(cut)}")
 
 
 
