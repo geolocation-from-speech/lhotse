@@ -3,6 +3,7 @@ from lhotse.lazy import Dillable
 from lhotse.utils import fastcopy
 from lhotse.cut.set import mix
 from lhotse import MonoCut, MultiCut
+from itertools import chain
 
 import numpy as np
 import math
@@ -10,6 +11,7 @@ from itertools import zip_longest
 import warnings
 import random
 from typing import Optional, Sequence, List
+import time
 
 
 class CutSpliceIterable(Dillable):
@@ -23,6 +25,7 @@ class CutSpliceIterable(Dillable):
 
         Options for serialize are 'speech', 'all', and 'none'.
     """
+    counter = 0
     def __init__(
         self,
         cutsets: Sequence[CutSet],
@@ -33,6 +36,7 @@ class CutSpliceIterable(Dillable):
         max_splices: int = 2,
         min_splices: int = 2,
         max_unique: int = 3,
+        min_unique: int = 1,
         max_num_overlaps: int = 5,
         max_overlap: List[float] = None,
         min_overlap: List[float] = None,
@@ -59,6 +63,7 @@ class CutSpliceIterable(Dillable):
         self.final_max_duration = final_max_duration
         self.max_splices = max_splices
         self.max_unique = max_unique
+        self.min_unique = min_unique
         self.min_splices = min_splices
         self.max_num_overlaps = max_num_overlaps
         assert min_splices <= max_splices
@@ -117,11 +122,14 @@ class CutSpliceIterable(Dillable):
         return self
 
     def __next__(self):
+        start_time = time.time()
         # Sample the number of splices
         # The number is random up to max_slices
+        CutSpliceIterable.counter += 1
+        if CutSpliceIterable.counter % 100 == 0:
+            print(f"New cut: {CutSpliceIterable.counter}")
         rng = random.Random()
-        #num_unique_sets = rng.randint(1, self.max_unique)
-        num_unique_sets = self.max_unique
+        num_unique_sets = rng.randint(self.min_unique, self.max_unique)
         num_splices = rng.randint(self.min_splices, self.max_splices)
         # Select which cutsets from which to sample (possibly repeated)
         # Pick without replacement
@@ -238,7 +246,7 @@ class CutSpliceIterable(Dillable):
                 offset = max(0, start - overlap * prev_dur)
             else:
                 offset = start
-            
+                       
             #print(f'offset: {offset}')
             #print(f'duration: {cut_to_append.duration}')
             #print(f'delta duration: {cut_to_append.duration - overlap*cut_to_append.duration}')
@@ -247,32 +255,45 @@ class CutSpliceIterable(Dillable):
             #print(f'new_duration: {new_duration}, {self.max_duration}')
             max_duration = self.max_duration
             num_overlaps = 0
-            num_ovlps_splice = np.array([])
-            if splice_cut:
-                num_ovlps_splice = np.array(
-                    [
-                        len(w.supervisions)
-                        for w in splice_cut.cut_into_windows(0.5)
-                    ]
-                )
             
-            num_ovlps_ovlp = np.array([])
-            if overlap_cut:
-                num_ovlps_ovlp = np.array(
-                    [
-                        len(w.supervisions)
-                        for w in overlap_cut.cut_into_windows(0.5)
-                    ]
-                )
+            ovlp_start_time = time.time()
             
-            num_overlaps = np.array(
+            
+            max_num_overlaps = max_overlap_with_offset(
                 [
-                    x + y
-                    for x, y in zip_longest(num_ovlps_ovlp, num_ovlps_splice, fillvalue=0)
+                    (overlap_cut, 0.0),
+                    (splice_cut, 0.0),
+                    (cut_to_append, offset),
                 ]
-            )  
-
-            if self.max_duration and new_duration > self.max_duration or np.max(num_overlaps) > self.max_num_overlaps:
+            )
+            # Old way
+            #num_ovlps_splice = np.array([])
+            #if splice_cut:
+            #    num_ovlps_splice = np.array(
+            #        [
+            #            len(w.supervisions)
+            #            for w in splice_cut.cut_into_windows(0.5)
+            #        ]
+            #    )
+            #
+            #num_ovlps_ovlp = np.array([])
+            #if overlap_cut:
+            #    num_ovlps_ovlp = np.array(
+            #        [
+            #            len(w.supervisions)
+            #            for w in overlap_cut.cut_into_windows(0.5)
+            #        ]
+            #    )
+            #
+            #num_overlaps = np.array(
+            #    [
+            #        x + y
+            #        for x, y in zip_longest(num_ovlps_ovlp, num_ovlps_splice, fillvalue=0)
+            #    ]
+            #)
+            #max_num_overlaps = np.max(num_overlaps)
+            #print(f"ovlp_time: {time.time() - ovlp_start_time}")
+            if (self.max_duration and new_duration > self.max_duration) or max_num_overlaps > self.max_num_overlaps:
                 # Two cases: One for overlap, the other for no overlap
                 if overlap > 0:
                     # Since we are tossing the overlap cut, we just set the
@@ -313,6 +334,7 @@ class CutSpliceIterable(Dillable):
                 
                 #print(f"num texts: {len(final_cut.supervisions)}")
                 #print(f"duration: {final_cut.duration}")
+                #print(f"time: {time.time() - start_time}")
                 return final_cut
 
 
@@ -404,6 +426,7 @@ class CutSpliceIterable(Dillable):
             )  
         #print(f"num texts: {len(final_cut.supervisions)}")
         #print(f"duration: {final_cut.duration}")
+        #print(f"time: {time.time() - start_time}")
         return final_cut
 
 
@@ -427,6 +450,35 @@ def random_mono_cut(cut, fix_channel=None):
     else:
         raise ValueError(f"Unexpected cut type: {type(cut)}")
 
+
+def max_overlap_with_offset(cuts_with_offsets):
+    """
+    cuts_with_offsets: list of (cut, offset) pairs
+        - cut: a Lhotse Cut (may be None)
+        - offset: float, number of seconds to shift all supervisions
+    
+    Returns:
+        int: maximum number of overlapping supervisions across all cuts.
+    """
+    events = []
+    for cut, offset in cuts_with_offsets:
+        if cut is None:
+            continue
+        for sup in cut.supervisions:
+            start = sup.start + offset
+            end = start + sup.duration
+            events.append((start, +1))
+            events.append((end, -1))
+
+    if not events:
+        return 0
+
+    cur, max_ov = 0, 0
+    for _, delta in sorted(events):
+        cur += delta
+        max_ov = max(max_ov, cur)
+
+    return max_ov
 
 
 def test():

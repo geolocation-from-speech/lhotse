@@ -52,6 +52,7 @@ from .libricss import download_libricss, prepare_libricss
 from .librilight import prepare_librilight
 from .librimix import download_librimix, prepare_librimix
 from .librispeech import download_librispeech, prepare_librispeech
+from .librispeechmix import prepare_librispeechmix
 from .libritts import (
     download_libritts,
     download_librittsr,
@@ -180,6 +181,7 @@ __all__ = [
     "prepare_librimix",
     "download_librispeech",
     "prepare_librispeech",
+    "prepare_librispeechmix",
     "download_libritts",
     "download_librittsr",
     "prepare_libritts",
